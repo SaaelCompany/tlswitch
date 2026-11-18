@@ -36,7 +36,7 @@ func TestLiveGIS(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer raw.Close()
-	conn, err := Handshake(ctx, raw, "gisoms.ffoms.gov.ru", nil)
+	conn, err := Handshake(ctx, raw, "gisoms.ffoms.gov.ru", nil, nil)
 	if err == nil {
 		defer conn.Close()
 		req := "GET / HTTP/1.0\r\nHost: gisoms.ffoms.gov.ru\r\nConnection: close\r\n\r\n"

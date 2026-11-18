@@ -21,6 +21,7 @@ import (
 	"github.com/SaaelCompany/tlswitch/internal/catalog"
 	"github.com/SaaelCompany/tlswitch/internal/certs"
 	"github.com/SaaelCompany/tlswitch/internal/config"
+	"github.com/SaaelCompany/tlswitch/internal/gosttls"
 	"github.com/SaaelCompany/tlswitch/internal/portal"
 	"github.com/SaaelCompany/tlswitch/internal/proxy"
 	"github.com/SaaelCompany/tlswitch/internal/upstream"
@@ -60,11 +61,16 @@ func New(cfg *config.File) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	client, err := loadClient(cfg)
+	if err != nil {
+		return nil, err
+	}
 	tr, err := upstream.NewFromMaterial(material, upstream.Options{
 		MinTLS:       minTLS,
 		DNS:          cfg.Upstream.DNS,
 		Proxy:        cfg.Upstream.Proxy,
 		AllowPrivate: cfg.Upstream.AllowPrivate,
+		Client:       client,
 	})
 	if err != nil {
 		return nil, err
@@ -258,6 +264,26 @@ func (s *Server) proxyReferer(w http.ResponseWriter, r *http.Request, host strin
 	r2.URL = &u
 	r2.RequestURI = u.RequestURI()
 	s.proxy.ServePath(w, r2)
+}
+
+func loadClient(cfg *config.File) (*gosttls.Identity, error) {
+	certPath := strings.TrimSpace(cfg.Upstream.ClientCert)
+	keyPath := strings.TrimSpace(cfg.Upstream.ClientKey)
+	if certPath == "" && keyPath == "" {
+		return nil, nil
+	}
+	if certPath == "" || keyPath == "" {
+		return nil, errors.New("нужны оба файла: upstream.client_cert и upstream.client_key")
+	}
+	certPEM, err := os.ReadFile(certPath)
+	if err != nil {
+		return nil, fmt.Errorf("upstream.client_cert: %w", err)
+	}
+	keyPEM, err := os.ReadFile(keyPath)
+	if err != nil {
+		return nil, fmt.Errorf("upstream.client_key: %w", err)
+	}
+	return gosttls.LoadIdentity(certPEM, keyPEM)
 }
 
 func dataDirOf(cfg *config.File) string {

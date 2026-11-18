@@ -34,6 +34,8 @@ type Options struct {
 	DNS          []string
 	Proxy        string
 	AllowPrivate bool
+	// Client is presented when a GOST site asks for a client certificate.
+	Client *gosttls.Identity
 	// Override replaces a dial address "host:port". Tests point a name at a local server.
 	Override map[string]string
 	Timeout  time.Duration
@@ -88,7 +90,7 @@ func newTransport(opt Options, roots *x509.CertPool, intermediates []*x509.Certi
 	base := &http.Transport{
 		DialContext: d.DialContext,
 		DialTLSContext: func(ctx context.Context, network, address string) (net.Conn, error) {
-			return dialTLS(ctx, d, tlsConf, extra, network, address)
+			return dialTLS(ctx, d, tlsConf, extra, opt.Client, network, address)
 		},
 		TLSClientConfig:       tlsConf,
 		TLSHandshakeTimeout:   opt.Timeout,
@@ -121,7 +123,7 @@ func (t *Transport) CloseIdleConnections() {
 	t.base.CloseIdleConnections()
 }
 
-func dialTLS(ctx context.Context, d *dialer, tlsConf *tls.Config, extra []*x509.Certificate, network, address string) (net.Conn, error) {
+func dialTLS(ctx context.Context, d *dialer, tlsConf *tls.Config, extra []*x509.Certificate, client *gosttls.Identity, network, address string) (net.Conn, error) {
 	host, _, err := net.SplitHostPort(address)
 	if err != nil {
 		return nil, err
@@ -142,7 +144,7 @@ func dialTLS(ctx context.Context, d *dialer, tlsConf *tls.Config, extra []*x509.
 		if dialErr != nil {
 			return nil, err
 		}
-		gconn, gerr := gosttls.Handshake(ctx, raw, host, extra)
+		gconn, gerr := gosttls.Handshake(ctx, raw, host, extra, client)
 		if gerr != nil {
 			_ = raw.Close()
 			if gostAnswer(gerr) {

@@ -30,12 +30,13 @@ const (
 	hsCertRequest     byte = 13
 	hsServerHelloDone byte = 14
 	hsClientKeyEx     byte = 16
+	hsCertVerify      byte = 15
 	hsFinished        byte = 20
 )
 
 // Handshake speaks TLS_GOSTR341112_256_WITH_28147_CNT_IMIT (RFC 9189) and
 // returns a connection whose Read and Write are the protected application data.
-func Handshake(ctx context.Context, raw net.Conn, serverName string, extraCerts []*x509.Certificate) (*Conn, error) {
+func Handshake(ctx context.Context, raw net.Conn, serverName string, extraCerts []*x509.Certificate, client *Identity) (*Conn, error) {
 	if dl, ok := ctx.Deadline(); ok {
 		_ = raw.SetDeadline(dl)
 	}
@@ -109,31 +110,34 @@ func Handshake(ctx context.Context, raw net.Conn, serverName string, extraCerts 
 	if err != nil {
 		return nil, err
 	}
+	sentClient := false
 	if wantClientCert {
-		empty := []byte{hsCertificate, 0, 0, 3, 0, 0, 0}
-		transcript = append(transcript, empty...)
-		if err := writePlain(raw, recordHandshake, empty); err != nil {
+		if client == nil {
+			return nil, errors.New("сайт запросил клиентский сертификат ГОСТ. Укажите сертификат организации в upstream.client_cert и закрытый ключ в upstream.client_key, затем перезапустите службу")
+		}
+		msg, err := certificateMessage(client.Certs)
+		if err != nil {
 			return nil, err
 		}
-		// A server that requires a user certificate aborts here, before Finished.
-		_ = raw.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
-		var peek [7]byte
-		n, perr := io.ReadFull(raw, peek[:])
-		if dl, ok := ctx.Deadline(); ok {
-			_ = raw.SetReadDeadline(dl)
-		} else {
-			_ = raw.SetReadDeadline(time.Time{})
+		transcript = append(transcript, msg...)
+		if err := writePlain(raw, recordHandshake, msg); err != nil {
+			return nil, err
 		}
-		if perr == nil || n > 0 {
-			if n >= 7 && peek[0] == recordAlert {
-				return nil, alertAfter(peek[5:7], true)
-			}
-			return nil, errors.New("сайт запросил клиентский сертификат ГОСТ и не принял подключение без него. Сертификат пользователя на шлюз не подставляется")
-		}
+		sentClient = true
 	}
 	transcript = append(transcript, ke...)
 	if err := writePlain(raw, recordHandshake, ke); err != nil {
 		return nil, err
+	}
+	if sentClient {
+		verify, err := certificateVerify(client.Key, transcript)
+		if err != nil {
+			return nil, err
+		}
+		transcript = append(transcript, verify...)
+		if err := writePlain(raw, recordHandshake, verify); err != nil {
+			return nil, err
+		}
 	}
 
 	ms := prf(ps, "master secret", append(append([]byte{}, clientRandom...), serverRandom...), 48)
@@ -172,7 +176,7 @@ func Handshake(ctx context.Context, raw net.Conn, serverName string, extraCerts 
 			return nil, err
 		}
 		if typ == recordAlert {
-			return nil, alertAfter(payload, wantClientCert)
+			return nil, alertAfter(payload, sentClient)
 		}
 		if typ != recordCCS {
 			return nil, fmt.Errorf("ожидался ChangeCipherSpec, пришло %d", typ)
@@ -185,7 +189,7 @@ func Handshake(ctx context.Context, raw net.Conn, serverName string, extraCerts 
 		return nil, err
 	}
 	if typ == recordAlert {
-		return nil, alertAfter(payload, wantClientCert)
+		return nil, alertAfter(payload, sentClient)
 	}
 	if typ != recordHandshake || len(payload) < 4 || payload[0] != hsFinished {
 		return nil, errors.New("сервер не прислал Finished")
@@ -477,11 +481,13 @@ func alertError(payload []byte) error {
 	return alertAfter(payload, false)
 }
 
-func alertAfter(payload []byte, clientCert bool) error {
-	if clientCert && len(payload) >= 2 {
+func alertAfter(payload []byte, sentClient bool) error {
+	if len(payload) >= 2 && sentClient {
 		switch payload[1] {
-		case 40, 42, 48:
-			return fmt.Errorf("сайт запросил клиентский сертификат ГОСТ и не принял подключение без него (alert %d). Сертификат пользователя на шлюз не подставляется", payload[1])
+		case 48:
+			return fmt.Errorf("сайт не доверяет клиентскому сертификату (alert %d)", payload[1])
+		case 40, 42:
+			return fmt.Errorf("сайт не принял клиентский сертификат (alert %d)", payload[1])
 		}
 	}
 	if len(payload) >= 2 {
