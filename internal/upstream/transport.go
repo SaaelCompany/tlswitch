@@ -15,9 +15,11 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/SaaelCompany/tlswitch/internal/certs"
+	"github.com/SaaelCompany/tlswitch/internal/gosttls"
 )
 
 // Transport is an HTTP client transport for upstream government sites.
@@ -84,7 +86,10 @@ func newTransport(opt Options, roots *x509.CertPool, intermediates []*x509.Certi
 		Renegotiation: tls.RenegotiateOnceAsClient,
 	}
 	base := &http.Transport{
-		DialContext:           d.DialContext,
+		DialContext: d.DialContext,
+		DialTLSContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+			return dialTLS(ctx, d, tlsConf, extra, network, address)
+		},
 		TLSClientConfig:       tlsConf,
 		TLSHandshakeTimeout:   opt.Timeout,
 		ResponseHeaderTimeout: 45 * time.Second,
@@ -114,6 +119,56 @@ func (t *Transport) RoundTrip(r *http.Request) (*http.Response, error) {
 // CloseIdleConnections closes idle sockets.
 func (t *Transport) CloseIdleConnections() {
 	t.base.CloseIdleConnections()
+}
+
+func dialTLS(ctx context.Context, d *dialer, tlsConf *tls.Config, extra []*x509.Certificate, network, address string) (net.Conn, error) {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := d.DialContext(ctx, network, address)
+	if err != nil {
+		return nil, err
+	}
+	conf := tlsConf.Clone()
+	conf.ServerName = host
+	tlsConn := tls.Client(raw, conf)
+	if err := tlsConn.HandshakeContext(ctx); err != nil {
+		_ = raw.Close()
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || isCertError(err) {
+			return nil, err
+		}
+		raw, dialErr := d.DialContext(ctx, network, address)
+		if dialErr != nil {
+			return nil, err
+		}
+		gconn, gerr := gosttls.Handshake(ctx, raw, host, extra)
+		if gerr != nil {
+			_ = raw.Close()
+			if gostAnswer(gerr) {
+				return nil, gerr
+			}
+			return nil, err
+		}
+		return gconn, nil
+	}
+	return tlsConn, nil
+}
+
+func isCertError(err error) bool {
+	var unk x509.UnknownAuthorityError
+	var hostErr x509.HostnameError
+	var inv x509.CertificateInvalidError
+	var sys x509.SystemRootsError
+	return errors.As(err, &unk) || errors.As(err, &hostErr) || errors.As(err, &inv) || errors.As(err, &sys)
+}
+
+func gostAnswer(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "клиентский сертификат") ||
+		strings.Contains(msg, "сертификат") ||
+		strings.Contains(msg, "ГОСТ-TLS") ||
+		strings.Contains(msg, "Finished")
 }
 
 func verifyChain(cs tls.ConnectionState, roots *x509.CertPool, extra []*x509.Certificate) error {

@@ -78,7 +78,7 @@ func Load(path string) (*File, error) {
 
 func prepare(cfg Config) (*File, error) {
 	if cfg.Listen == "" {
-		cfg.Listen = "0.0.0.0:8080"
+		cfg.Listen = "0.0.0.0:80"
 	}
 	if _, err := net.ResolveTCPAddr("tcp", cfg.Listen); err != nil {
 		return nil, fmt.Errorf("listen: %w", err)

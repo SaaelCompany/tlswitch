@@ -238,10 +238,12 @@ func explain(err error) string {
 	}
 	msg := err.Error()
 	switch {
+	case strings.Contains(msg, "клиентский сертификат"):
+		return msg
 	case strings.Contains(msg, "внутренний или локальный"):
 		return "Соединение остановлено: имя сайта указывает на внутренний адрес."
 	case strings.Contains(msg, "timeout") || strings.Contains(msg, "TLS handshake") || strings.Contains(msg, "handshake failure"):
-		return "Сайт не завершил обычное TLS-соединение. Если он принимает только ГОСТ-TLS (КриптоПро), этот шлюз к нему не подключится."
+		return "Сайт не завершил TLS. Не подошёл ни обычный TLS, ни ГОСТ с шифром CNT_IMIT."
 	default:
 		if len(msg) > 280 {
 			msg = msg[:280]

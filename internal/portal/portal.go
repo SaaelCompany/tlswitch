@@ -107,7 +107,7 @@ var pageTmpl = template.Must(template.New("portal").Parse(`<!DOCTYPE html>
     {{end}}
   </div>
   <footer>
-    <p>Прокси открывает сайт по адресу <code>/go/имя-сайта/</code>. Если во внутренней DNS имя сайта указывает на этот сервер, можно открывать его как <code>http://имя-сайта</code>.</p>
+    <p>Прокси открывает сайт по адресу <code>/go/имя-сайта/</code>. В файле hosts строка выглядит так: <code>IP-сервера имя-сайта</code>, без <code>http://</code>. После этого сайт открывается как <code>http://имя-сайта</code>. Адрес <code>https://</code> потребует сертификат на компьютере пользователя.</p>
   </footer>
 </main>
 </body>
