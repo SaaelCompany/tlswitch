@@ -71,3 +71,37 @@ func TestRFC9189Records(t *testing.T) {
 		t.Fatalf("server app\n plain %x\n tag %x want %x", body, gotTag, wantTag)
 	}
 }
+
+func TestRecordRoundTripCrossesKeyMesh(t *testing.T) {
+	key := bytes.Repeat([]byte{0x11}, 32)
+	iv := bytes.Repeat([]byte{0x22}, 8)
+	macKey := bytes.Repeat([]byte{0x33}, 32)
+	plain := bytes.Repeat([]byte("gost"), 400) // 1600 bytes, past the 1024-byte mesh
+	outMAC, err := newMAC(macKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := newCNT(key, iv)
+	tag, err := outMAC.tag(0, 0x17, plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := append(append([]byte{}, plain...), tag...)
+	enc := make([]byte, len(body))
+	out.XORKeyStream(enc, body)
+
+	inMAC, err := newMAC(macKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := newCNT(key, iv)
+	in.XORKeyStream(enc, enc)
+	got := enc[:len(enc)-4]
+	sum, err := inMAC.tag(0, 0x17, got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, plain) || !bytes.Equal(enc[len(enc)-4:], sum) {
+		t.Fatal("meshed record did not round-trip")
+	}
+}

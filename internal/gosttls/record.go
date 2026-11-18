@@ -18,6 +18,7 @@ var meshConst = []byte{
 // (RFC 9189 CNT_IMIT, param-Z).
 type cntStream struct {
 	c     *gost28147.Cipher
+	sbox  *gost28147.Sbox
 	iv    [8]byte
 	count int
 	gamma [8]byte
@@ -25,8 +26,13 @@ type cntStream struct {
 }
 
 func newCNT(key, iv []byte) *cntStream {
+	return newCNTSbox(key, iv, &gost28147.SboxIdtc26gost28147paramZ)
+}
+
+func newCNTSbox(key, iv []byte, sbox *gost28147.Sbox) *cntStream {
 	s := &cntStream{
-		c:    gost28147.NewCipher(key, &gost28147.SboxIdtc26gost28147paramZ),
+		c:    gost28147.NewCipher(key, sbox),
+		sbox: sbox,
 		used: 8,
 	}
 	copy(s.iv[:], iv)
@@ -77,7 +83,7 @@ func (s *cntStream) next() {
 func (s *cntStream) mesh() {
 	newKey := make([]byte, 32)
 	s.c.NewECBDecrypter().CryptBlocks(newKey, meshConst)
-	s.c = gost28147.NewCipher(newKey, &gost28147.SboxIdtc26gost28147paramZ)
+	s.c = gost28147.NewCipher(newKey, s.sbox)
 	var niv [8]byte
 	s.c.Encrypt(niv[:], s.iv[:])
 	copy(s.iv[:], niv[:])
@@ -87,16 +93,45 @@ func (s *cntStream) mesh() {
 // record of one direction. RFC 9189 feeds STR_8(seq)|type|version|length|fragment
 // of all records so far into one CBC-MAC.
 type macState struct {
-	m *gost28147.MAC
+	m    *gost28147.MAC
+	done int // bytes already mixed as full blocks
+	held int // bytes waiting in the current block
 }
 
 func newMAC(key []byte) (*macState, error) {
-	c := gost28147.NewCipher(key, &gost28147.SboxIdtc26gost28147paramZ)
+	return newMACSbox(key, &gost28147.SboxIdtc26gost28147paramZ)
+}
+
+func newMACSbox(key []byte, sbox *gost28147.Sbox) (*macState, error) {
+	c := gost28147.NewCipher(key, sbox)
 	m, err := c.NewMAC(4, make([]byte, 8))
 	if err != nil {
 		return nil, err
 	}
 	return &macState{m: m}, nil
+}
+
+func (m *macState) add(p []byte) error {
+	for len(p) > 0 {
+		if m.held == 0 && m.done == 1024 {
+			m.m.Mesh(meshConst)
+			m.done = 0
+		}
+		take := 8 - m.held
+		if take > len(p) {
+			take = len(p)
+		}
+		if _, err := m.m.Write(p[:take]); err != nil {
+			return err
+		}
+		p = p[take:]
+		m.held += take
+		if m.held == 8 {
+			m.held = 0
+			m.done += 8
+		}
+	}
+	return nil
 }
 
 func (m *macState) tag(seq uint64, typ byte, payload []byte) ([]byte, error) {
@@ -106,11 +141,15 @@ func (m *macState) tag(seq uint64, typ byte, payload []byte) ([]byte, error) {
 	hdr[9] = 0x03
 	hdr[10] = 0x03
 	binary.BigEndian.PutUint16(hdr[11:13], uint16(len(payload)))
-	if _, err := m.m.Write(hdr[:]); err != nil {
+	if err := m.add(hdr[:]); err != nil {
 		return nil, err
 	}
-	if _, err := m.m.Write(payload); err != nil {
+	if err := m.add(payload); err != nil {
 		return nil, err
+	}
+	if m.held > 0 && m.done == 1024 {
+		m.m.Mesh(meshConst)
+		m.done = 0
 	}
 	// Sum mixes the unfinished block into a copy. The running MAC must keep
 	// that block for the next record.

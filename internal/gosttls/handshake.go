@@ -36,19 +36,60 @@ const (
 
 // Handshake speaks TLS_GOSTR341112_256_WITH_28147_CNT_IMIT (RFC 9189) and
 // returns a connection whose Read and Write are the protected application data.
+// CipherParams selects how the premaster secret and the records are protected.
+// The zero value is RFC 9189: VKO 2012, param-Z for the key wrap and the records.
+type CipherParams struct {
+	// LegacyVKO uses the 2001 key agreement (X coordinate only).
+	LegacyVKO bool
+	// WrapCryptoProA wraps the premaster secret with CryptoPro-A.
+	WrapCryptoProA bool
+	// RecordCryptoProA protects records with CryptoPro-A instead of param-Z.
+	RecordCryptoProA bool
+}
+
+// CipherAttempts is the order in which a peer that fails the record checksum is retried.
+func CipherAttempts() []CipherParams {
+	return []CipherParams{
+		{},
+		{RecordCryptoProA: true},
+		{WrapCryptoProA: true},
+		{WrapCryptoProA: true, RecordCryptoProA: true},
+		{LegacyVKO: true, WrapCryptoProA: true, RecordCryptoProA: true},
+	}
+}
+
+func (p CipherParams) String() string {
+	vko := "VKO-2012"
+	if p.LegacyVKO {
+		vko = "VKO-2001"
+	}
+	wrap, rec := "param-Z", "param-Z"
+	if p.WrapCryptoProA {
+		wrap = "CryptoPro-A"
+	}
+	if p.RecordCryptoProA {
+		rec = "CryptoPro-A"
+	}
+	return vko + ", упаковка " + wrap + ", запись " + rec
+}
+
+func (p CipherParams) recordSbox() *gost28147.Sbox {
+	if p.RecordCryptoProA {
+		return &gost28147.SboxIdGost2814789CryptoProAParamSet
+	}
+	return &gost28147.SboxIdtc26gost28147paramZ
+}
+
 func Handshake(ctx context.Context, raw net.Conn, serverName string, extraCerts []*x509.Certificate, client *Identity) (*Conn, error) {
-	return handshake(ctx, raw, serverName, extraCerts, client, false)
+	return handshake(ctx, raw, serverName, extraCerts, client, CipherParams{})
 }
 
-// HandshakeCryptoPro is Handshake with the premaster secret wrapped under
-// the CryptoPro-A parameter set. Record protection stays on param-Z.
-// GIS OMS publishes a GOST key on the CryptoPro curve and checks the
-// record checksum against that wrap, not the param-Z wrap from RFC 9189.
-func HandshakeCryptoPro(ctx context.Context, raw net.Conn, serverName string, extraCerts []*x509.Certificate, client *Identity) (*Conn, error) {
-	return handshake(ctx, raw, serverName, extraCerts, client, true)
+// HandshakeParams is Handshake with an explicit GOST parameter set.
+func HandshakeParams(ctx context.Context, raw net.Conn, serverName string, extraCerts []*x509.Certificate, client *Identity, params CipherParams) (*Conn, error) {
+	return handshake(ctx, raw, serverName, extraCerts, client, params)
 }
 
-func handshake(ctx context.Context, raw net.Conn, serverName string, extraCerts []*x509.Certificate, client *Identity, wrapCryptoPro bool) (*Conn, error) {
+func handshake(ctx context.Context, raw net.Conn, serverName string, extraCerts []*x509.Certificate, client *Identity, params CipherParams) (*Conn, error) {
 	if dl, ok := ctx.Deadline(); ok {
 		_ = raw.SetDeadline(dl)
 	}
@@ -118,7 +159,7 @@ func handshake(ctx context.Context, raw net.Conn, serverName string, extraCerts 
 	if err != nil {
 		return nil, err
 	}
-	ke, ps, err := clientKeyExchange(pub, algo, clientRandom, serverRandom, wrapCryptoPro)
+	ke, ps, err := clientKeyExchange(pub, algo, clientRandom, serverRandom, params)
 	if err != nil {
 		return nil, err
 	}
@@ -154,18 +195,19 @@ func handshake(ctx context.Context, raw net.Conn, serverName string, extraCerts 
 
 	ms := prf(ps, "master secret", append(append([]byte{}, clientRandom...), serverRandom...), 48)
 	kb := prf(ms, "key expansion", append(append([]byte{}, serverRandom...), clientRandom...), 144)
-	outMAC, err := newMAC(kb[0:32])
+	sbox := params.recordSbox()
+	outMAC, err := newMACSbox(kb[0:32], sbox)
 	if err != nil {
 		return nil, err
 	}
-	inMAC, err := newMAC(kb[32:64])
+	inMAC, err := newMACSbox(kb[32:64], sbox)
 	if err != nil {
 		return nil, err
 	}
 	conn := &Conn{
 		raw: raw,
-		out: &half{mac: outMAC, cnt: newCNT(kb[64:96], kb[128:136])},
-		in:  &half{mac: inMAC, cnt: newCNT(kb[96:128], kb[136:144])},
+		out: &half{mac: outMAC, cnt: newCNTSbox(kb[64:96], kb[128:136], sbox)},
+		in:  &half{mac: inMAC, cnt: newCNTSbox(kb[96:128], kb[136:144], sbox)},
 	}
 	if err := writePlain(raw, recordCCS, []byte{1}); err != nil {
 		return nil, err
@@ -319,7 +361,7 @@ func parseCertificates(body []byte) ([]*x509.Certificate, error) {
 	return out, nil
 }
 
-func clientKeyExchange(peer *gost3410.PublicKey, algoDER, clientRandom, serverRandom []byte, wrapCryptoPro bool) ([]byte, []byte, error) {
+func clientKeyExchange(peer *gost3410.PublicKey, algoDER, clientRandom, serverRandom []byte, params CipherParams) ([]byte, []byte, error) {
 	priv, err := gost3410.GenPrivateKey(peer.C, rand.Reader)
 	if err != nil {
 		return nil, nil, err
@@ -335,13 +377,25 @@ func clientKeyExchange(peer *gost3410.PublicKey, algoDER, clientRandom, serverRa
 	if ukmInt.Sign() == 0 {
 		ukmInt = big.NewInt(1)
 	}
-	vko, err := priv.KEK2012256(peer, ukmInt)
-	if err != nil {
-		return nil, nil, err
+	var vko []byte
+	if params.LegacyVKO {
+		rawPoint, err := priv.KEK(peer, ukmInt)
+		if err != nil {
+			return nil, nil, err
+		}
+		if len(rawPoint) < 32 {
+			return nil, nil, errors.New("короткий результат VKO")
+		}
+		vko = rawPoint[:32]
+	} else {
+		vko, err = priv.KEK2012256(peer, ukmInt)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 	sbox := &gost28147.SboxIdtc26gost28147paramZ
 	paramOID := []byte{0x2a, 0x85, 0x03, 0x07, 0x01, 0x02, 0x05, 0x01, 0x01}
-	if wrapCryptoPro {
+	if params.WrapCryptoProA {
 		sbox = &gost28147.SboxIdGost2814789CryptoProAParamSet
 		paramOID = []byte{0x2a, 0x85, 0x03, 0x02, 0x02, 0x1f, 0x01}
 	}

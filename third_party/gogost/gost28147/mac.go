@@ -71,6 +71,14 @@ func (m *MAC) Clone() *MAC {
 	return &n
 }
 
+// Mesh replaces the MAC key with the CryptoPro key-meshing result.
+// The running state is kept. constant is the 32-byte RFC 4357 value.
+func (m *MAC) Mesh(constant []byte) {
+	newKey := make([]byte, KeySize)
+	m.c.NewECBDecrypter().CryptBlocks(newKey, constant)
+	m.c = NewCipher(newKey, m.c.sbox)
+}
+
 func (m *MAC) BlockSize() int {
 	return BlockSize
 }

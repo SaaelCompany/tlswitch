@@ -12,10 +12,13 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/SaaelCompany/tlswitch/internal/certs"
@@ -140,22 +143,8 @@ func dialTLS(ctx context.Context, d *dialer, tlsConf *tls.Config, extra []*x509.
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || isCertError(err) {
 			return nil, err
 		}
-		raw, dialErr := d.DialContext(ctx, network, address)
-		if dialErr != nil {
-			return nil, err
-		}
-		gconn, gerr := gosttls.Handshake(ctx, raw, host, extra, client)
-		if gerr != nil && strings.Contains(gerr.Error(), "контрольная сумма") {
-			_ = raw.Close()
-			raw2, dialErr := d.DialContext(ctx, network, address)
-			if dialErr != nil {
-				return nil, gerr
-			}
-			raw = raw2
-			gconn, gerr = gosttls.HandshakeCryptoPro(ctx, raw, host, extra, client)
-		}
+		gconn, gerr := dialGOST(ctx, d, network, address, host, extra, client)
 		if gerr != nil {
-			_ = raw.Close()
 			if gostAnswer(gerr) {
 				return nil, gerr
 			}
@@ -172,6 +161,59 @@ func isCertError(err error) bool {
 	var inv x509.CertificateInvalidError
 	var sys x509.SystemRootsError
 	return errors.As(err, &unk) || errors.As(err, &hostErr) || errors.As(err, &inv) || errors.As(err, &sys)
+}
+
+var gostMode sync.Map // host -> gosttls.CipherParams
+
+func dialGOST(ctx context.Context, d *dialer, network, address, host string, extra []*x509.Certificate, client *gosttls.Identity) (net.Conn, error) {
+	attempts := gosttls.CipherAttempts()
+	if cached, ok := gostMode.Load(host); ok {
+		attempts = []gosttls.CipherParams{cached.(gosttls.CipherParams)}
+	}
+	var last error
+	for i, params := range attempts {
+		raw, err := d.DialContext(ctx, network, address)
+		if err != nil {
+			if last != nil {
+				return nil, last
+			}
+			return nil, err
+		}
+		conn, herr := gosttls.HandshakeParams(ctx, raw, host, extra, client, params)
+		if herr == nil {
+			if _, known := gostMode.Load(host); !known && (params != gosttls.CipherParams{}) {
+				log.Printf("%s: подошли параметры %s", host, params)
+			}
+			gostMode.Store(host, params)
+			return conn, nil
+		}
+		_ = raw.Close()
+		last = herr
+		if i == 0 {
+			if _, known := gostMode.Load(host); known {
+				gostMode.Delete(host)
+				if !retryGOST(herr) {
+					return nil, herr
+				}
+				return dialGOST(ctx, d, network, address, host, extra, client)
+			}
+		}
+		if !retryGOST(herr) {
+			return nil, herr
+		}
+	}
+	return nil, last
+}
+
+func retryGOST(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "контрольная сумма") || strings.Contains(msg, "EOF")
 }
 
 func gostAnswer(err error) bool {

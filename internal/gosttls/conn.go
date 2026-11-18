@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/subtle"
 	"errors"
+	"fmt"
 	"net"
 	"time"
 )
@@ -109,7 +110,7 @@ func (c *Conn) readRecord() (byte, []byte, error) {
 		return 0, nil, err
 	}
 	if subtle.ConstantTimeCompare(got, want) != 1 {
-		return 0, nil, errors.New("контрольная сумма ГОСТ-записи не сошлась")
+		return 0, nil, fmt.Errorf("контрольная сумма ГОСТ-записи не сошлась (тип %d, %d байт)", typ, len(payload))
 	}
 	c.in.seq++
 	return typ, body, nil
