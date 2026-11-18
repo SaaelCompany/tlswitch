@@ -17,9 +17,12 @@ import (
 
 // Identity is an organization's GOST certificate and the matching private key.
 // It is sent only when a site asks for a client certificate.
+// Key is set for a PEM key. Sign is set when the key stays on a token:
+// it returns the RFC 9189 signature, little-endian r || little-endian s.
 type Identity struct {
 	Certs []*x509.Certificate
 	Key   *gost3410.PrivateKey
+	Sign  func(transcript []byte) ([]byte, error)
 }
 
 // LoadIdentity reads a PEM certificate chain and a PEM or raw GOST private key.
@@ -63,14 +66,35 @@ func certificateMessage(certs []*x509.Certificate) ([]byte, error) {
 	return handshakeMsg(hsCertificate, body), nil
 }
 
-func certificateVerify(key *gost3410.PrivateKey, transcript []byte) ([]byte, error) {
-	sig, err := signTranscript(key, transcript)
-	if err != nil {
-		return nil, err
+func certificateVerify(id *Identity, transcript []byte) ([]byte, error) {
+	if id == nil {
+		return nil, errors.New("нет клиентского сертификата")
 	}
+	var sig []byte
+	var err error
 	hashAlg := byte(0x40)
-	if key.C.PointSize() == 64 {
-		hashAlg = 0x41
+	switch {
+	case id.Sign != nil:
+		sig, err = id.Sign(transcript)
+		if err != nil {
+			return nil, err
+		}
+		if len(sig) > 64 {
+			hashAlg = 0x41
+		}
+	case id.Key != nil:
+		sig, err = signTranscript(id.Key, transcript)
+		if err != nil {
+			return nil, err
+		}
+		if id.Key.C.PointSize() == 64 {
+			hashAlg = 0x41
+		}
+	default:
+		return nil, errors.New("нет закрытого ключа клиентского сертификата")
+	}
+	if len(sig) == 0 {
+		return nil, errors.New("клиентский сертификат: пустая подпись")
 	}
 	body := []byte{0x08, hashAlg, byte(len(sig) >> 8), byte(len(sig))}
 	body = append(body, sig...)

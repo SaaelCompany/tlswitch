@@ -36,13 +36,15 @@ type PortalSite struct {
 
 // Upstream is how the gateway connects to government sites.
 type Upstream struct {
-	MinTLS       string   `yaml:"min_tls"`
-	DNS          []string `yaml:"dns"`
-	CAFile       string   `yaml:"ca_file"`
-	ClientCert   string   `yaml:"client_cert"`
-	ClientKey    string   `yaml:"client_key"`
-	Proxy        string   `yaml:"proxy"`
-	AllowPrivate bool     `yaml:"allow_private"`
+	MinTLS           string   `yaml:"min_tls"`
+	DNS              []string `yaml:"dns"`
+	CAFile           string   `yaml:"ca_file"`
+	ClientCert       string   `yaml:"client_cert"`
+	ClientKey        string   `yaml:"client_key"`
+	ClientThumbprint string   `yaml:"client_thumbprint"`
+	ClientPin        string   `yaml:"client_pin"`
+	Proxy            string   `yaml:"proxy"`
+	AllowPrivate     bool     `yaml:"allow_private"`
 }
 
 // Browser is the server-side Chrome/Edge session used when a real login is required.
@@ -203,7 +205,7 @@ func DefaultPortal() []PortalSite {
 	return []PortalSite{
 		{Title: "Госуслуги", URL: "https://www.gosuslugi.ru", Note: "Заявление, запись, личный кабинет"},
 		{Title: "ЕСИА", URL: "https://esia.gosuslugi.ru/login/", Note: "Вход в государственные системы"},
-		{Title: "ГИС ОМС", URL: "https://gisoms.ffoms.gov.ru", Note: "Федеральный фонд ОМС. Нужен сертификат организации в upstream.client_cert и upstream.client_key"},
+		{Title: "ГИС ОМС", URL: "https://gisoms.ffoms.gov.ru", Note: "Федеральный фонд ОМС. Нужен сертификат организации с токена: upstream.client_thumbprint"},
 		{Title: "ФРМО", URL: "https://nr.egisz.rosminzdrav.ru", Note: "Реестр медицинских организаций"},
 		{Title: "ФРМР", URL: "https://portalmr.egisz.rosminzdrav.ru", Note: "Регистр медицинских работников"},
 		{Title: "Налог.ру", URL: "https://www.nalog.gov.ru", Note: "Федеральная налоговая служба"},

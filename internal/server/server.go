@@ -267,8 +267,22 @@ func (s *Server) proxyReferer(w http.ResponseWriter, r *http.Request, host strin
 }
 
 func loadClient(cfg *config.File) (*gosttls.Identity, error) {
+	thumb := strings.TrimSpace(cfg.Upstream.ClientThumbprint)
 	certPath := strings.TrimSpace(cfg.Upstream.ClientCert)
 	keyPath := strings.TrimSpace(cfg.Upstream.ClientKey)
+	if thumb != "" && (certPath != "" || keyPath != "") {
+		return nil, errors.New("укажите либо upstream.client_thumbprint, либо файлы client_cert и client_key")
+	}
+	if thumb != "" {
+		id, err := gosttls.LoadToken(thumb, cfg.Upstream.ClientPin)
+		if err != nil {
+			return nil, err
+		}
+		if len(id.Certs) > 0 {
+			log.Printf("клиентский сертификат: %s", id.Certs[0].Subject)
+		}
+		return id, nil
+	}
 	if certPath == "" && keyPath == "" {
 		return nil, nil
 	}
@@ -283,7 +297,14 @@ func loadClient(cfg *config.File) (*gosttls.Identity, error) {
 	if err != nil {
 		return nil, fmt.Errorf("upstream.client_key: %w", err)
 	}
-	return gosttls.LoadIdentity(certPEM, keyPEM)
+	id, err := gosttls.LoadIdentity(certPEM, keyPEM)
+	if err != nil {
+		return nil, err
+	}
+	if len(id.Certs) > 0 {
+		log.Printf("клиентский сертификат: %s", id.Certs[0].Subject)
+	}
+	return id, nil
 }
 
 func dataDirOf(cfg *config.File) string {

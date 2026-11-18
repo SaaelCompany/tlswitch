@@ -113,7 +113,7 @@ func Handshake(ctx context.Context, raw net.Conn, serverName string, extraCerts 
 	sentClient := false
 	if wantClientCert {
 		if client == nil {
-			return nil, errors.New("сайт запросил клиентский сертификат ГОСТ. Укажите сертификат организации в upstream.client_cert и закрытый ключ в upstream.client_key, затем перезапустите службу")
+			return nil, errors.New("сайт запросил клиентский сертификат ГОСТ. Укажите upstream.client_thumbprint сертификата с токена или файлы upstream.client_cert и upstream.client_key")
 		}
 		msg, err := certificateMessage(client.Certs)
 		if err != nil {
@@ -130,7 +130,7 @@ func Handshake(ctx context.Context, raw net.Conn, serverName string, extraCerts 
 		return nil, err
 	}
 	if sentClient {
-		verify, err := certificateVerify(client.Key, transcript)
+		verify, err := certificateVerify(client, transcript)
 		if err != nil {
 			return nil, err
 		}
