@@ -8,6 +8,24 @@ import (
 	"github.com/SaaelCompany/tlswitch/internal/config"
 )
 
+func TestBuiltinHostIsAllowed(t *testing.T) {
+	list, err := allow.New([]string{"gov.ru"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(filepath.Join(t.TempDir(), "sites.json"), list, []config.PortalSite{
+		{Title: "ФРМО", URL: "https://nr.egisz.rosminzdrav.ru"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !list.Allows("nr.egisz.rosminzdrav.ru") {
+		t.Fatal("portal host was not allowed")
+	}
+	if list.Allows("other.rosminzdrav.ru") {
+		t.Fatal("a neighbouring host was opened")
+	}
+}
+
 func TestAddRemembersHostAndSurvivesReload(t *testing.T) {
 	list, err := allow.New([]string{"gosuslugi.ru"})
 	if err != nil {

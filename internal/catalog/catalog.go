@@ -37,6 +37,9 @@ func Open(path string, list *allow.List, builtin []config.PortalSite) (*Catalog,
 	c := &Catalog{path: path, allow: list, added: map[string]bool{}}
 	for _, s := range builtin {
 		c.builtin = append(c.builtin, Site{Title: s.Title, URL: s.URL, Note: s.Note})
+		if _, host, err := clean(s.URL, s.Title); err == nil && !list.Allows(host) {
+			_ = list.Add(host)
+		}
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {

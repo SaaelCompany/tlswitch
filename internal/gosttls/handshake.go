@@ -48,7 +48,9 @@ func Handshake(ctx context.Context, raw net.Conn, serverName string, extraCerts 
 	hello := clientHello(clientRandom, serverName)
 	var transcript []byte
 	transcript = append(transcript, hello...)
-	if err := writePlain(raw, recordHandshake, hello); err != nil {
+	// CryptoPro and Yandex send the first record as TLS 1.0. A 1.2 record
+	// version makes zakupki.gov.ru abort the handshake with alert 40.
+	if err := writeHello(raw, hello); err != nil {
 		return nil, err
 	}
 
@@ -232,22 +234,21 @@ func clientHello(random []byte, serverName string) []byte {
 	sniList[2] = 0
 	binary.BigEndian.PutUint16(sniList[3:5], uint16(len(name)))
 	copy(sniList[5:], name)
-	groups := []byte{0x00, 0x22, 0x00, 0x23, 0x00, 0x24, 0x00, 0x25}
-	groupData := make([]byte, 2+len(groups))
-	binary.BigEndian.PutUint16(groupData[:2], uint16(len(groups)))
-	copy(groupData[2:], groups)
-	sigs := []byte{0x00, 0x04, 0x08, 0x40, 0x08, 0x41}
+	// 0xEEEE/0xEFEF/0xEDED are the identifiers CryptoPro still requires.
+	// 0x0840 and 0x0841 are the same GOST algorithms in the IANA registry.
+	sigs := []byte{0x00, 0x0a, 0xee, 0xee, 0x08, 0x40, 0xef, 0xef, 0x08, 0x41, 0xed, 0xed}
 	exts := concat(
+		extension(0xff01, []byte{0x00}),
 		extension(0x0000, sniList),
 		extension(0x000d, sigs),
-		extension(0x000a, groupData),
-		extension(0xff01, []byte{0x00}),
 	)
 	body := make([]byte, 0, 64+len(exts))
 	body = append(body, 0x03, 0x03)
 	body = append(body, random...)
 	body = append(body, 0x00) // session id
-	body = append(body, 0x00, 0x02, 0xc1, 0x02)
+	// 0xFF85 is CryptoPro's number for the same CNT_IMIT suite. Zakupki
+	// selects it when a client offers it next to the IANA number 0xC102.
+	body = append(body, 0x00, 0x04, 0xff, 0x85, 0xc1, 0x02)
 	body = append(body, 0x01, 0x00) // null compression
 	extLen := make([]byte, 2)
 	binary.BigEndian.PutUint16(extLen, uint16(len(exts)))
@@ -266,7 +267,7 @@ func parseServerHello(body []byte) ([]byte, error) {
 	if off+3 > len(body) {
 		return nil, errors.New("короткий ServerHello")
 	}
-	if body[off] != 0xc1 || body[off+1] != 0x02 {
+	if !((body[off] == 0xc1 && body[off+1] == 0x02) || (body[off] == 0xff && body[off+1] == 0x85)) {
 		return nil, fmt.Errorf("сервер выбрал не ГОСТ-шифр %x", body[off:off+2])
 	}
 	return random, nil
@@ -436,6 +437,15 @@ func extension(typ uint16, data []byte) []byte {
 	binary.BigEndian.PutUint16(out[2:4], uint16(len(data)))
 	copy(out[4:], data)
 	return out
+}
+
+func writeHello(w io.Writer, payload []byte) error {
+	hdr := []byte{recordHandshake, 0x03, 0x01, byte(len(payload) >> 8), byte(len(payload))}
+	if _, err := w.Write(hdr); err != nil {
+		return err
+	}
+	_, err := w.Write(payload)
+	return err
 }
 
 func writePlain(w io.Writer, typ byte, payload []byte) error {

@@ -93,6 +93,18 @@ func prepare(cfg Config) (*File, error) {
 	}
 	if len(cfg.AllowSuffixes) == 0 {
 		cfg.AllowSuffixes = DefaultSuffixes()
+	} else {
+		// An already installed tlswitch.yaml lists suffixes by name. New
+		// built-in suffixes are added so replacing only the program is enough.
+		have := map[string]bool{}
+		for _, s := range cfg.AllowSuffixes {
+			have[s] = true
+		}
+		for _, s := range DefaultSuffixes() {
+			if !have[s] {
+				cfg.AllowSuffixes = append(cfg.AllowSuffixes, s)
+			}
+		}
 	}
 	if len(cfg.Portal) == 0 {
 		cfg.Portal = DefaultPortal()
@@ -171,6 +183,7 @@ func DefaultSuffixes() []string {
 		"nalog.gov.ru",
 		"government.ru",
 		"gov.ru",
+		"rosminzdrav.ru",
 		"mos.ru",
 		"cbr.ru",
 		"rosreestr.ru",
@@ -188,6 +201,9 @@ func DefaultPortal() []PortalSite {
 	return []PortalSite{
 		{Title: "Госуслуги", URL: "https://www.gosuslugi.ru", Note: "Заявление, запись, личный кабинет"},
 		{Title: "ЕСИА", URL: "https://esia.gosuslugi.ru/login/", Note: "Вход в государственные системы"},
+		{Title: "ГИС ОМС", URL: "https://gisoms.ffoms.gov.ru", Note: "Федеральный фонд ОМС. Сайт просит личный сертификат ГОСТ, без него соединение обрывается"},
+		{Title: "ФРМО", URL: "https://nr.egisz.rosminzdrav.ru", Note: "Реестр медицинских организаций"},
+		{Title: "ФРМР", URL: "https://portalmr.egisz.rosminzdrav.ru", Note: "Регистр медицинских работников"},
 		{Title: "Налог.ру", URL: "https://www.nalog.gov.ru", Note: "Федеральная налоговая служба"},
 		{Title: "Личный кабинет налогоплательщика", URL: "https://lkfl2.nalog.ru", Note: "Налоги физического лица"},
 		{Title: "Мой налог", URL: "https://lknpd.nalog.ru", Note: "Самозанятые"},

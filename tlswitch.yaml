@@ -23,6 +23,7 @@ allow_suffixes:
   - nalog.gov.ru
   - government.ru
   - gov.ru
+  - rosminzdrav.ru
   - mos.ru
   - cbr.ru
   - rosreestr.ru
