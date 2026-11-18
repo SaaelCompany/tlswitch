@@ -4,10 +4,15 @@ package browser
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 )
+
+func trustPlatform(roots, hints [][]byte) error {
+	return errors.New("хранилище сертификатов ОС здесь не используется")
+}
 
 func writePolicy(roots, hints []string) error {
 	doc := map[string]any{}

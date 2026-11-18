@@ -35,7 +35,9 @@ go build -o tlswitch.exe .\cmd\tlswitch
 .\tlswitch.exe start
 ```
 
-Остановка и удаление службы: `.\tlswitch.exe stop`, `.\tlswitch.exe uninstall`.
+Остановка и удаление службы: `.\tlswitch.exe stop`, `.\tlswitch.exe uninstall`. После замены `tlswitch.exe` выполните `.\tlswitch.exe restart`.
+
+Служба работает от системной учётной записи. Политика сертификатов Chrome и Edge пишется в раздел компьютера (`HKLM`), потому что у службы нет профиля пользователя и запись в `HKCU` даёт Access is denied.
 
 Без службы, для проверки: `.\tlswitch.exe -config C:\tlswitch\tlswitch.yaml`.
 

@@ -3,6 +3,7 @@ package browser
 import (
 	"bytes"
 	"encoding/base64"
+	"fmt"
 
 	"github.com/SaaelCompany/tlswitch/internal/certs"
 )
@@ -16,7 +17,12 @@ func installFromMaterial(m *certs.Material) error {
 		}
 		hints = append(hints, c.Raw)
 	}
-	return writePolicy(encodeAll(roots), encodeAll(hints))
+	if err := writePolicy(encodeAll(roots), encodeAll(hints)); err != nil {
+		if err2 := trustPlatform(roots, hints); err2 != nil {
+			return fmt.Errorf("%w. %v", err, err2)
+		}
+	}
+	return nil
 }
 
 func encodeAll(ders [][]byte) []string {
