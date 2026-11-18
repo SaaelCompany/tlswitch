@@ -10,6 +10,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/SaaelCompany/tlswitch/internal/allow"
 	"github.com/SaaelCompany/tlswitch/internal/browser"
+	"github.com/SaaelCompany/tlswitch/internal/catalog"
 	"github.com/SaaelCompany/tlswitch/internal/certs"
 	"github.com/SaaelCompany/tlswitch/internal/config"
 	"github.com/SaaelCompany/tlswitch/internal/portal"
@@ -30,6 +32,7 @@ type Server struct {
 	allow   *allow.List
 	proxy   *proxy.Gateway
 	portal  *portal.Page
+	catalog *catalog.Catalog
 	browser *browser.Manager
 	tr      *upstream.Transport
 }
@@ -66,14 +69,10 @@ func New(cfg *config.File) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	dataDir := cfg.DataDir
-	if dataDir == "" {
-		dataDir = "data"
-	}
-	if !filepath.IsAbs(dataDir) {
-		if exe, err := os.Executable(); err == nil {
-			dataDir = filepath.Join(filepath.Dir(exe), dataDir)
-		}
+	dataDir := dataDirOf(cfg)
+	cat, err := catalog.Open(filepath.Join(dataDir, "sites.json"), list, cfg.Portal)
+	if err != nil {
+		return nil, err
 	}
 	br := browser.NewManager(browser.Options{
 		Allow:       list,
@@ -89,10 +88,18 @@ func New(cfg *config.File) (*Server, error) {
 		Enabled:     cfg.Browser.Enabled,
 	})
 	return &Server{
-		cfg:     cfg,
-		allow:   list,
-		proxy:   proxy.New(list, tr),
-		portal:  portal.New(cfg.Portal),
+		cfg:   cfg,
+		allow: list,
+		proxy: proxy.New(list, tr),
+		portal: portal.New(func() []portal.Entry {
+			sites := cat.Sites()
+			out := make([]portal.Entry, len(sites))
+			for i, s := range sites {
+				out[i] = portal.Entry{Title: s.Title, Note: s.Note, URL: s.URL, Custom: s.Custom}
+			}
+			return out
+		}),
+		catalog: cat,
 		browser: br,
 		tr:      tr,
 	}, nil
@@ -178,11 +185,92 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		s.browser.ServeAPI(w, r)
 	case s.proxy.Allows(r.Host):
 		s.proxy.ServeHost(w, r)
+	case r.URL.Path == "/sites" && r.Method == http.MethodPost:
+		s.addSite(w, r)
+	case r.URL.Path == "/sites/delete" && r.Method == http.MethodPost:
+		s.deleteSite(w, r)
 	case r.URL.Path == "/":
 		s.portal.ServeHTTP(w, r)
 	default:
+		if host := hostFromReferer(r); host != "" && s.proxy.Allows(host) {
+			s.proxyReferer(w, r, host)
+			return
+		}
 		http.NotFound(w, r)
 	}
+}
+
+func (s *Server) addSite(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Redirect(w, r, "/?err="+url.QueryEscape("не удалось прочитать форму"), http.StatusSeeOther)
+		return
+	}
+	if _, err := s.catalog.Add(r.FormValue("url"), r.FormValue("title")); err != nil {
+		http.Redirect(w, r, "/?err="+url.QueryEscape(err.Error()), http.StatusSeeOther)
+		return
+	}
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+func (s *Server) deleteSite(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
+	_ = s.catalog.Remove(r.FormValue("url"))
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+// hostFromReferer recovers the government host when the page asks the gateway
+// for a root path such as /__jsch or /auth. Those requests used to be a 404
+// in the middle of login.
+func hostFromReferer(r *http.Request) string {
+	ref := r.Referer()
+	if ref == "" {
+		return ""
+	}
+	u, err := url.Parse(ref)
+	if err != nil {
+		return ""
+	}
+	path := u.EscapedPath()
+	if !strings.HasPrefix(path, "/go/") {
+		return ""
+	}
+	rest := strings.TrimPrefix(path, "/go/")
+	host, _, _ := strings.Cut(rest, "/")
+	host, err = url.PathUnescape(host)
+	if err != nil || host == "" || host == "sw.js" {
+		return ""
+	}
+	return host
+}
+
+func (s *Server) proxyReferer(w http.ResponseWriter, r *http.Request, host string) {
+	u := *r.URL
+	suffix := r.URL.EscapedPath()
+	if suffix == "" {
+		suffix = "/"
+	}
+	u.Path = "/go/" + host + suffix
+	u.RawPath = ""
+	r2 := r.Clone(r.Context())
+	r2.URL = &u
+	r2.RequestURI = u.RequestURI()
+	s.proxy.ServePath(w, r2)
+}
+
+func dataDirOf(cfg *config.File) string {
+	dir := cfg.DataDir
+	if dir == "" {
+		dir = "data"
+	}
+	if !filepath.IsAbs(dir) {
+		if exe, err := os.Executable(); err == nil {
+			dir = filepath.Join(filepath.Dir(exe), dir)
+		}
+	}
+	return dir
 }
 
 func (s *Server) guard(next http.Handler) http.Handler {

@@ -6,17 +6,24 @@ import (
 	"net/url"
 
 	"github.com/SaaelCompany/tlswitch/internal/allow"
-	"github.com/SaaelCompany/tlswitch/internal/config"
 )
+
+// Entry is one card on the start page.
+type Entry struct {
+	Title  string
+	Note   string
+	URL    string
+	Custom bool
+}
 
 // Page is the start page.
 type Page struct {
-	sites []config.PortalSite
+	list func() []Entry
 }
 
-// New builds the start page.
-func New(sites []config.PortalSite) *Page {
-	return &Page{sites: sites}
+// New builds the start page. list is read on every request so added sites appear at once.
+func New(list func() []Entry) *Page {
+	return &Page{list: list}
 }
 
 // ServeHTTP writes the start page.
@@ -24,12 +31,18 @@ func (p *Page) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	type card struct {
 		Title     string
 		Note      string
+		URL       string
 		Browser   string
 		Proxy     string
 		ProxyHost string
+		Custom    bool
 	}
 	var cards []card
-	for _, s := range p.sites {
+	sites := []Entry{}
+	if p.list != nil {
+		sites = p.list()
+	}
+	for _, s := range sites {
 		u, err := url.Parse(s.URL)
 		if err != nil || u.Host == "" {
 			continue
@@ -44,9 +57,11 @@ func (p *Page) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		cards = append(cards, card{
 			Title:     s.Title,
 			Note:      s.Note,
+			URL:       u.String(),
 			Browser:   "/browser/?url=" + url.QueryEscape(u.String()),
 			Proxy:     "/go/" + host + "/",
 			ProxyHost: host,
+			Custom:    s.Custom,
 		})
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -54,7 +69,10 @@ func (p *Page) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("X-Frame-Options", "DENY")
 	w.Header().Set("Referrer-Policy", "no-referrer")
-	_ = pageTmpl.Execute(w, cards)
+	_ = pageTmpl.Execute(w, struct {
+		Cards []card
+		Error string
+	}{Cards: cards, Error: r.URL.Query().Get("err")})
 }
 
 var pageTmpl = template.Must(template.New("portal").Parse(`<!DOCTYPE html>
@@ -76,9 +94,13 @@ var pageTmpl = template.Must(template.New("portal").Parse(`<!DOCTYPE html>
   h2 { margin: 0; font-size: 1.05rem; }
   .note { margin: 0; color: #526173; flex: 1; }
   .actions { display: flex; flex-wrap: wrap; gap: 8px; }
-  a.btn { text-decoration: none; border-radius: 8px; padding: 8px 10px; font-size: .95rem; }
-  a.primary { background: #0b3a66; color: white; }
-  a.secondary { background: #e7eef5; color: #0b3a66; }
+  a.btn, button { font: inherit; text-decoration: none; border: 0; border-radius: 8px; padding: 8px 10px; font-size: .95rem; cursor: pointer; }
+  a.primary, button.primary { background: #0b3a66; color: white; }
+  a.secondary, button.secondary { background: #e7eef5; color: #0b3a66; }
+  button.danger { background: transparent; color: #8a3b3b; padding: 0; }
+  form.add { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; background: white; border-radius: 14px; padding: 16px; }
+  form.add input { font: inherit; border: 1px solid #c9d4e0; border-radius: 8px; padding: 8px 10px; }
+  form.add input[name=url] { flex: 1; min-width: 16rem; }
   footer { color: #526173; font-size: .9rem; line-height: 1.45; }
   code { font-family: ui-monospace, monospace; }
 </style>
@@ -94,18 +116,25 @@ var pageTmpl = template.Must(template.New("portal").Parse(`<!DOCTYPE html>
     «Через прокси» легче и быстрее, но форма входа часто возвращает браузер на настоящий https-адрес мимо шлюза.
     Пароли, введённые в режиме «На сервере», видны этому серверу. Не публикуйте порт в интернет без пароля в конфигурации.
   </div>
+  {{if .Error}}<div class="warn">{{.Error}}</div>{{end}}
   <div class="grid">
-    {{range .}}
+    {{range .Cards}}
     <article>
       <h2>{{.Title}}</h2>
       <p class="note">{{.Note}}</p>
       <div class="actions">
         <a class="btn primary" href="{{.Browser}}">На сервере</a>
         <a class="btn secondary" href="{{.Proxy}}">Через прокси</a>
+        {{if .Custom}}<form method="post" action="/sites/delete"><input type="hidden" name="url" value="{{.URL}}"><button class="danger" type="submit">Удалить</button></form>{{end}}
       </div>
     </article>
     {{end}}
   </div>
+  <form class="add" method="post" action="/sites">
+    <input name="title" maxlength="80" placeholder="Название">
+    <input name="url" required maxlength="500" placeholder="https://имя-сайта">
+    <button class="primary" type="submit">Добавить сайт</button>
+  </form>
   <footer>
     <p>Прокси открывает сайт по адресу <code>/go/имя-сайта/</code>. В файле hosts строка выглядит так: <code>IP-сервера имя-сайта</code>, без <code>http://</code>. После этого сайт открывается как <code>http://имя-сайта</code>. Адрес <code>https://</code> потребует сертификат на компьютере пользователя.</p>
   </footer>

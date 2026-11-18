@@ -31,6 +31,21 @@ func TestBytesPath(t *testing.T) {
 	}
 }
 
+func TestOAuthRedirectStays(t *testing.T) {
+	opt := Options{Mode: ModePath, Origin: "http://10.0.0.5:8080", Host: "esia.gosuslugi.ru", Allow: allowGov}
+	in := []byte(`redirect_uri=https://www.gosuslugi.ru/auth/cb&next=https://esia.gosuslugi.ru/login <base href="/">`)
+	got := string(Bytes(in, opt))
+	if !strings.Contains(got, "redirect_uri=https://www.gosuslugi.ru/auth/cb") {
+		t.Fatalf("redirect_uri rewritten: %s", got)
+	}
+	if !strings.Contains(got, "http://10.0.0.5:8080/go/esia.gosuslugi.ru/login") {
+		t.Fatalf("login url not rewritten: %s", got)
+	}
+	if !strings.Contains(got, `<base href="/go/esia.gosuslugi.ru/">`) {
+		t.Fatalf("base: %s", got)
+	}
+}
+
 func TestBytesHost(t *testing.T) {
 	opt := Options{Mode: ModeHost, Host: "www.gosuslugi.ru", Allow: allowGov}
 	in := []byte(`https://www.gosuslugi.ru/a http://www.gosuslugi.ru/b https://evil.example/c`)

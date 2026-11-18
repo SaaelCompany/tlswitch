@@ -36,6 +36,7 @@ const injectJS = `(function(cfg){
     return false;
   }
   function map(u){
+    if(u==null||u==="") return u;
     try{
       var url=new URL(u, location.href);
       if(cfg.mode==="path"){
@@ -118,6 +119,26 @@ const injectJS = `(function(cfg){
     var nu=map(action);
     if(nu!==action) f.setAttribute("action", nu);
   }, true);
+  function hookProp(proto, name){
+    var desc=Object.getOwnPropertyDescriptor(proto, name);
+    if(!desc||!desc.set||!desc.configurable) return;
+    Object.defineProperty(proto, name, {
+      configurable:true,
+      enumerable:desc.enumerable,
+      get:desc.get,
+      set:function(v){ return desc.set.call(this, map(v)); }
+    });
+  }
+  if(window.HTMLScriptElement) hookProp(HTMLScriptElement.prototype, "src");
+  if(window.HTMLImageElement) hookProp(HTMLImageElement.prototype, "src");
+  if(window.HTMLIFrameElement) hookProp(HTMLIFrameElement.prototype, "src");
+  if(window.HTMLLinkElement) hookProp(HTMLLinkElement.prototype, "href");
+  if(window.HTMLFormElement) hookProp(HTMLFormElement.prototype, "action");
+  var setAttr=Element.prototype.setAttribute;
+  Element.prototype.setAttribute=function(name, value){
+    if(/^(src|href|action|poster)$/i.test(name)) value=map(value);
+    return setAttr.call(this, name, value);
+  };
   if(cfg.mode==="path" && navigator.serviceWorker){
     var reg=navigator.serviceWorker.register.bind(navigator.serviceWorker);
     navigator.serviceWorker.register=function(){

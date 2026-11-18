@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync"
 
 	"golang.org/x/net/idna"
 )
@@ -13,6 +14,7 @@ import (
 // subdomain of it. Matching is done on punycode, so look-alike Unicode names
 // do not pass.
 type List struct {
+	mu       sync.RWMutex
 	suffixes []string
 }
 
@@ -44,6 +46,12 @@ func (l *List) Allows(host string) bool {
 	if err != nil {
 		return false
 	}
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l.allowsLocked(n)
+}
+
+func (l *List) allowsLocked(n string) bool {
 	for _, s := range l.suffixes {
 		if n == s || strings.HasSuffix(n, "."+s) {
 			return true
@@ -52,8 +60,42 @@ func (l *List) Allows(host string) bool {
 	return false
 }
 
+// Add permits one exact hostname. A name already covered by a suffix is left as is.
+func (l *List) Add(host string) error {
+	n, err := Normalize(host)
+	if err != nil {
+		return err
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.allowsLocked(n) {
+		return nil
+	}
+	l.suffixes = append(l.suffixes, n)
+	return nil
+}
+
+// Remove drops an exact suffix previously added. Broader suffixes stay.
+func (l *List) Remove(host string) {
+	n, err := Normalize(host)
+	if err != nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := l.suffixes[:0]
+	for _, s := range l.suffixes {
+		if s != n {
+			out = append(out, s)
+		}
+	}
+	l.suffixes = out
+}
+
 // Suffixes returns the normalized suffixes.
 func (l *List) Suffixes() []string {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
 	out := make([]string, len(l.suffixes))
 	copy(out, l.suffixes)
 	return out

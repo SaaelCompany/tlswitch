@@ -187,7 +187,7 @@ func DefaultSuffixes() []string {
 func DefaultPortal() []PortalSite {
 	return []PortalSite{
 		{Title: "Госуслуги", URL: "https://www.gosuslugi.ru", Note: "Заявление, запись, личный кабинет"},
-		{Title: "ЕСИА", URL: "https://esia.gosuslugi.ru", Note: "Вход в государственные системы"},
+		{Title: "ЕСИА", URL: "https://esia.gosuslugi.ru/login/", Note: "Вход в государственные системы"},
 		{Title: "Налог.ру", URL: "https://www.nalog.gov.ru", Note: "Федеральная налоговая служба"},
 		{Title: "Личный кабинет налогоплательщика", URL: "https://lkfl2.nalog.ru", Note: "Налоги физического лица"},
 		{Title: "Мой налог", URL: "https://lknpd.nalog.ru", Note: "Самозанятые"},

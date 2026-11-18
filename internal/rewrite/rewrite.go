@@ -45,6 +45,9 @@ func Bytes(in []byte, opt Options) []byte {
 			continue
 		}
 		repl, changed := mapMatch(m, opt)
+		if changed && redirectValue(in, i) {
+			changed = false
+		}
 		if !changed {
 			out = append(out, in[i:i+m.n]...)
 			i += m.n
@@ -297,6 +300,26 @@ func scanHost(b []byte, escaped bool) (string, int, bool) {
 func bytesContains(b []byte, c byte) bool {
 	for _, x := range b {
 		if x == c {
+			return true
+		}
+	}
+	return false
+}
+
+// redirectValue reports whether the URL at i is the value of an OAuth return
+// address. Rewriting it makes ЕСИА reject the login and answer 404.
+func redirectValue(in []byte, i int) bool {
+	start := i - 96
+	if start < 0 {
+		start = 0
+	}
+	window := strings.ToLower(string(in[start:i]))
+	for _, key := range []string{
+		"redirect_uri=", "redirect_url=", "post_logout_redirect_uri=",
+		"return_url=", "returnurl=", "relaystate=",
+		"redirect_uri%3d", "redirect_url%3d",
+	} {
+		if strings.HasSuffix(window, key) {
 			return true
 		}
 	}
