@@ -20,13 +20,13 @@
 
 ## Установка на Windows
 
-Нужен Go 1.22 или новее.
+Готовый файл для 64-битной Windows — `tlswitch.exe` в корне этого репозитория. Рядом с ним лежит `tlswitch.yaml`. Скопируйте оба в одну папку, например `C:\tlswitch`. Установите Google Chrome или Microsoft Edge, если нужен режим «На сервере».
+
+Собрать заново (нужен Go 1.22 или новее), находясь в каталоге с исходниками:
 
 ```powershell
 go build -o tlswitch.exe .\cmd\tlswitch
 ```
-
-Положите рядом `tlswitch.exe` и `tlswitch.yaml`. Установите Google Chrome или Microsoft Edge, если нужен режим «На сервере».
 
 От администратора:
 

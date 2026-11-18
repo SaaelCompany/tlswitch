@@ -2,3 +2,4 @@
 /data/
 /tlswitch
 *.exe
+!tlswitch.exe
