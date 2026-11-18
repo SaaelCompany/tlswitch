@@ -270,11 +270,25 @@ func loadClient(cfg *config.File) (*gosttls.Identity, error) {
 	thumb := strings.TrimSpace(cfg.Upstream.ClientThumbprint)
 	certPath := strings.TrimSpace(cfg.Upstream.ClientCert)
 	keyPath := strings.TrimSpace(cfg.Upstream.ClientKey)
+	pin := cfg.Upstream.ClientPin
+	// client_cert is a PEM path. A thumbprint pasted there is not a file,
+	// and Windows reports that the file cannot be found.
+	if thumb == "" && certPath != "" {
+		if normalized, ok := gosttls.Thumbprint(certPath); ok {
+			thumb = normalized
+			certPath = ""
+			if pin == "" && keyPath != "" && !looksLikeKeyFile(keyPath) {
+				pin = keyPath
+				keyPath = ""
+			}
+			log.Printf("отпечаток сертификата прочитан из client_cert")
+		}
+	}
 	if thumb != "" && (certPath != "" || keyPath != "") {
-		return nil, errors.New("укажите либо upstream.client_thumbprint, либо файлы client_cert и client_key")
+		return nil, errors.New("укажите либо отпечаток сертификата, либо файлы client_cert и client_key. Отпечаток пишется в client_thumbprint, PIN в client_pin")
 	}
 	if thumb != "" {
-		id, err := gosttls.LoadToken(thumb, cfg.Upstream.ClientPin)
+		id, err := gosttls.LoadToken(thumb, pin)
 		if err != nil {
 			return nil, err
 		}
@@ -305,6 +319,19 @@ func loadClient(cfg *config.File) (*gosttls.Identity, error) {
 		log.Printf("клиентский сертификат: %s", id.Certs[0].Subject)
 	}
 	return id, nil
+}
+
+func looksLikeKeyFile(s string) bool {
+	low := strings.ToLower(s)
+	if strings.ContainsAny(s, `/\`) || strings.Contains(s, ":") {
+		return true
+	}
+	for _, ext := range []string{".pem", ".key", ".crt", ".cer"} {
+		if strings.HasSuffix(low, ext) {
+			return true
+		}
+	}
+	return strings.Contains(low, "begin ")
 }
 
 func dataDirOf(cfg *config.File) string {

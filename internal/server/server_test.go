@@ -104,6 +104,16 @@ func TestPortalAuthAndBlock(t *testing.T) {
 	}
 }
 
+func TestThumbprintPastedIntoClientCert(t *testing.T) {
+	cfg := &config.File{}
+	cfg.Upstream.ClientCert = "e0 d6 68 bc 76 c3 76 63 98 8e f4 18 c4 a5 97 1a 24 2f 29 f9"
+	cfg.Upstream.ClientKey = "12345678"
+	_, err := loadClient(cfg)
+	if err == nil || strings.Contains(err.Error(), "cannot find") || strings.Contains(err.Error(), "open ") {
+		t.Fatal(err)
+	}
+}
+
 func mustReq(t *testing.T, path, referer string) *http.Request {
 	t.Helper()
 	req, err := http.NewRequest(http.MethodGet, "http://gateway"+path, nil)

@@ -145,6 +145,15 @@ func dialTLS(ctx context.Context, d *dialer, tlsConf *tls.Config, extra []*x509.
 			return nil, err
 		}
 		gconn, gerr := gosttls.Handshake(ctx, raw, host, extra, client)
+		if gerr != nil && strings.Contains(gerr.Error(), "контрольная сумма") {
+			_ = raw.Close()
+			raw2, dialErr := d.DialContext(ctx, network, address)
+			if dialErr != nil {
+				return nil, gerr
+			}
+			raw = raw2
+			gconn, gerr = gosttls.HandshakeCryptoPro(ctx, raw, host, extra, client)
+		}
 		if gerr != nil {
 			_ = raw.Close()
 			if gostAnswer(gerr) {
@@ -170,6 +179,7 @@ func gostAnswer(err error) bool {
 	return strings.Contains(msg, "клиентский сертификат") ||
 		strings.Contains(msg, "сертификат") ||
 		strings.Contains(msg, "ГОСТ-TLS") ||
+		strings.Contains(msg, "ГОСТ-записи") ||
 		strings.Contains(msg, "Finished")
 }
 

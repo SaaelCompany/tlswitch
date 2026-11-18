@@ -40,4 +40,34 @@ func TestRFC9189Records(t *testing.T) {
 	if !bytes.Equal(out, want) {
 		t.Fatalf("app ciphertext\n got %x\nwant %x", out, want)
 	}
+	// Server Finished uses the read half of the same key block.
+	inMAC, err := newMAC(km[32:64])
+	if err != nil {
+		t.Fatal(err)
+	}
+	inCNT := newCNT(km[96:128], km[136:144])
+	serverWire, _ := hex.DecodeString("7BDDBB3C0A6A4A9E302B468CCD5CF786665FFEBC")
+	inCNT.XORKeyStream(serverWire, serverWire)
+	body = serverWire[:len(serverWire)-4]
+	gotTag := serverWire[len(serverWire)-4:]
+	wantTag, err := inMAC.tag(0, 0x16, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPlain, _ := hex.DecodeString("1400000CD6A2A697E9F23DB0F9017A79")
+	if !bytes.Equal(body, wantPlain) || !bytes.Equal(gotTag, wantTag) {
+		t.Fatalf("server finished\n plain %x\n tag %x want %x", body, gotTag, wantTag)
+	}
+	app = []byte("HELO\n")
+	serverApp, _ := hex.DecodeString("0F368E5CEC86B4F8D7")
+	inCNT.XORKeyStream(serverApp, serverApp)
+	body = serverApp[:len(serverApp)-4]
+	gotTag = serverApp[len(serverApp)-4:]
+	wantTag, err = inMAC.tag(1, 0x17, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(body, app) || !bytes.Equal(gotTag, wantTag) {
+		t.Fatalf("server app\n plain %x\n tag %x want %x", body, gotTag, wantTag)
+	}
 }

@@ -37,6 +37,18 @@ const (
 // Handshake speaks TLS_GOSTR341112_256_WITH_28147_CNT_IMIT (RFC 9189) and
 // returns a connection whose Read and Write are the protected application data.
 func Handshake(ctx context.Context, raw net.Conn, serverName string, extraCerts []*x509.Certificate, client *Identity) (*Conn, error) {
+	return handshake(ctx, raw, serverName, extraCerts, client, false)
+}
+
+// HandshakeCryptoPro is Handshake with the premaster secret wrapped under
+// the CryptoPro-A parameter set. Record protection stays on param-Z.
+// GIS OMS publishes a GOST key on the CryptoPro curve and checks the
+// record checksum against that wrap, not the param-Z wrap from RFC 9189.
+func HandshakeCryptoPro(ctx context.Context, raw net.Conn, serverName string, extraCerts []*x509.Certificate, client *Identity) (*Conn, error) {
+	return handshake(ctx, raw, serverName, extraCerts, client, true)
+}
+
+func handshake(ctx context.Context, raw net.Conn, serverName string, extraCerts []*x509.Certificate, client *Identity, wrapCryptoPro bool) (*Conn, error) {
 	if dl, ok := ctx.Deadline(); ok {
 		_ = raw.SetDeadline(dl)
 	}
@@ -106,7 +118,7 @@ func Handshake(ctx context.Context, raw net.Conn, serverName string, extraCerts 
 	if err != nil {
 		return nil, err
 	}
-	ke, ps, err := clientKeyExchange(pub, algo, clientRandom, serverRandom)
+	ke, ps, err := clientKeyExchange(pub, algo, clientRandom, serverRandom, wrapCryptoPro)
 	if err != nil {
 		return nil, err
 	}
@@ -307,7 +319,7 @@ func parseCertificates(body []byte) ([]*x509.Certificate, error) {
 	return out, nil
 }
 
-func clientKeyExchange(peer *gost3410.PublicKey, algoDER, clientRandom, serverRandom []byte) ([]byte, []byte, error) {
+func clientKeyExchange(peer *gost3410.PublicKey, algoDER, clientRandom, serverRandom []byte, wrapCryptoPro bool) ([]byte, []byte, error) {
 	priv, err := gost3410.GenPrivateKey(peer.C, rand.Reader)
 	if err != nil {
 		return nil, nil, err
@@ -327,12 +339,18 @@ func clientKeyExchange(peer *gost3410.PublicKey, algoDER, clientRandom, serverRa
 	if err != nil {
 		return nil, nil, err
 	}
-	kexp := diversify(vko, ukm)
+	sbox := &gost28147.SboxIdtc26gost28147paramZ
+	paramOID := []byte{0x2a, 0x85, 0x03, 0x07, 0x01, 0x02, 0x05, 0x01, 0x01}
+	if wrapCryptoPro {
+		sbox = &gost28147.SboxIdGost2814789CryptoProAParamSet
+		paramOID = []byte{0x2a, 0x85, 0x03, 0x02, 0x02, 0x1f, 0x01}
+	}
+	kexp := diversifySbox(vko, ukm, sbox)
 	ps := make([]byte, 32)
 	if _, err := rand.Read(ps); err != nil {
 		return nil, nil, err
 	}
-	c := gost28147.NewCipher(kexp, &gost28147.SboxIdtc26gost28147paramZ)
+	c := gost28147.NewCipher(kexp, sbox)
 	enc := make([]byte, 32)
 	c.NewECBEncrypter().CryptBlocks(enc, ps)
 	mac, err := c.NewMAC(4, ukm)
@@ -343,17 +361,17 @@ func clientKeyExchange(peer *gost3410.PublicKey, algoDER, clientRandom, serverRa
 		return nil, nil, err
 	}
 	tag := mac.Sum(nil)
-	blob := keyTransport(enc, tag, ukm, algoDER, eph.Raw())
+	blob := keyTransport(enc, tag, ukm, algoDER, eph.Raw(), paramOID)
 	return handshakeMsg(hsClientKeyEx, blob), ps, nil
 }
 
-func keyTransport(enc, mac, ukm, algo, point []byte) []byte {
+func keyTransport(enc, mac, ukm, algo, point, paramOID []byte) []byte {
 	pointWrap := wrapPoint(point)
 	spki := derSeq(concat(algo, derBitString(pointWrap)))
 	// [0] IMPLICIT SubjectPublicKeyInfo replaces the SEQUENCE tag.
 	eph := derTag(0xA0, spki[1+derLenSize(spki):])
 	params := derTag(0xA0, concat(
-		derOID([]byte{0x2a, 0x85, 0x03, 0x07, 0x01, 0x02, 0x05, 0x01, 0x01}),
+		derOID(paramOID),
 		eph,
 		derOctet(ukm),
 	))
@@ -378,6 +396,10 @@ func wrapPoint(point []byte) []byte {
 }
 
 func diversify(kek, ukm []byte) []byte {
+	return diversifySbox(kek, ukm, &gost28147.SboxIdtc26gost28147paramZ)
+}
+
+func diversifySbox(kek, ukm []byte, sbox *gost28147.Sbox) []byte {
 	out := append([]byte(nil), kek...)
 	for i := 0; i < 8; i++ {
 		var s1, s2 uint64
@@ -392,7 +414,7 @@ func diversify(kek, ukm []byte) []byte {
 		iv := make([]byte, 8)
 		binary.LittleEndian.PutUint32(iv[:4], uint32(s1))
 		binary.LittleEndian.PutUint32(iv[4:], uint32(s2))
-		c := gost28147.NewCipher(out, &gost28147.SboxIdtc26gost28147paramZ)
+		c := gost28147.NewCipher(out, sbox)
 		c.NewCFBEncrypter(iv).XORKeyStream(out, out)
 	}
 	return out

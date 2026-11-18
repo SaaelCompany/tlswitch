@@ -24,3 +24,12 @@ func parseThumb(s string) ([]byte, error) {
 	}
 	return raw, nil
 }
+
+// Thumbprint returns the canonical hex form when s is a certificate thumbprint.
+func Thumbprint(s string) (string, bool) {
+	raw, err := parseThumb(s)
+	if err != nil {
+		return "", false
+	}
+	return hex.EncodeToString(raw), true
+}
