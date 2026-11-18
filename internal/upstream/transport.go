@@ -150,9 +150,9 @@ func dialTLS(ctx context.Context, d *dialer, tlsConf *tls.Config, extra []*x509.
 			}
 			return nil, err
 		}
-		return gconn, nil
+		return wrapResponse(gconn), nil
 	}
-	return tlsConn, nil
+	return wrapResponse(tlsConn), nil
 }
 
 func isCertError(err error) bool {

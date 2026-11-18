@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bufio"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -8,8 +9,10 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"fmt"
 	"io"
 	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -115,6 +118,78 @@ func TestPathProxyRewrites(t *testing.T) {
 	blocked.Body.Close()
 	if blocked.StatusCode != http.StatusForbidden {
 		t.Fatalf("blocked status %d", blocked.StatusCode)
+	}
+}
+
+func TestProxyAcceptsDuplicateChunkedEncoding(t *testing.T) {
+	ca, caPEM, leaf := mint(t, "example.com")
+	ln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
+		Certificates: []tls.Certificate{leaf},
+		MinVersion:   tls.VersionTLS12,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	page := []byte(`<!DOCTYPE html><html><body><p>открылось</p></body></html>`)
+	raw := fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nTransfer-Encoding: chunked\r\nTransfer-Encoding: chunked\r\n\r\n%x\r\n%s\r\n0\r\n\r\n", len(page), page)
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				_ = c.SetDeadline(time.Now().Add(5 * time.Second))
+				br := bufio.NewReader(c)
+				req, err := http.ReadRequest(br)
+				if err != nil {
+					return
+				}
+				io.Copy(io.Discard, req.Body)
+				req.Body.Close()
+				_, _ = io.WriteString(c, raw)
+			}(c)
+		}
+	}()
+
+	roots := x509.NewCertPool()
+	roots.AppendCertsFromPEM(caPEM)
+	tr, err := upstream.NewFromMaterial(&certs.Material{Roots: roots, Certificates: []*x509.Certificate{ca}}, upstream.Options{
+		AllowPrivate: true,
+		Override:     map[string]string{"example.com:443": ln.Addr().String()},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	list, err := allow.New([]string{"example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gw := New(list, tr)
+	front := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/go/") {
+			gw.ServePath(w, r)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer front.Close()
+
+	hc := &http.Client{Timeout: 5 * time.Second}
+	resp, err := hc.Get(front.URL + "/go/example.com/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	text := string(body)
+	if resp.StatusCode != 200 {
+		t.Fatalf("status %d %s", resp.StatusCode, text)
+	}
+	if strings.Contains(text, "Сайт не открылся") || !strings.Contains(text, "открылось") {
+		t.Fatalf("page %s", text)
 	}
 }
 
